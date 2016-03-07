@@ -1,0 +1,12 @@
+[ClassVersion("1.0.0.0"), FriendlyName("xWebAuthorization")]
+class MSFT_xWebAuthorization : OMI_BaseResource
+{
+	[Write,ValueMap{"Present", "Absent"},Values{"Present", "Absent"}] String Ensure;
+	[Write,ValueMap{"Allow","Deny"},Values{"Allow", "Deny"}] String Action;
+	[Write,ValueMap{"Users","Roles"},Values{"Users","Roles"}] String ResourceType;
+	[Required,Key] String Value;
+	[Required,Key] String Site;
+	[Write] String Application;
+	[Write] String Path;
+	[Write] String Verbs;
+};
