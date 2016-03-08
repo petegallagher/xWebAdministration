@@ -103,12 +103,20 @@ function Set-TargetResource
 			"Roles" { $roles = $Value }
 		}
 
-		# We set the filter to the root path for authorization when setting the rule
-		$Filter = "/system.webServer/security/authorization"
+		$CurrentRule = Get-TargetResource -ResourceType $ResourceType -Value $Value -Verbs $Verbs -Site $Site -Application $Application -Path $Path
 
-		# Create the authorization rule
-		Write-Verbose "Setting configuration for `"$Filter`" at PSPath `"$PSPath`""
-		Set-WebConfiguration -Filter $Filter -PSPath $PSPath -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
+		if ($CurrentRule.Ensure -eq "Present") {
+			# Update the authorization rule
+			Write-Verbose "Setting configuration for `"$Filter`" at PSPath `"$PSPath`""
+			Set-WebConfiguration -Filter $Filter -PSPath $PSPath -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
+		} else {
+			# We set the filter to the root path for authorization when creating new rules
+			$Filter = "/system.webServer/security/authorization"	
+
+			# Create the authorization rule
+			Write-Verbose "Adding configuration for `"$Filter`" at PSPath `"$PSPath`""
+			Add-WebConfiguration -Filter $Filter -PSPath $PSPath -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
+		}
 	} else {
 		# Delete the authorization rule
 		Write-Verbose "Clearing configuration for `"$Filter`" at PSPath `"$PSPath`""
