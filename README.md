@@ -78,6 +78,16 @@ Currently, only FastCgiModule is supported.
 * **Bindings**: The SSL bindings to implement.
 * **Ensure**: Ensures if the bindings are Present or Absent.
 
+### xWebAuthorization
+* **Ensure**: Ensures the authorization rule is Present or Absent.
+* **Action**: Action for the rule: { **Allow** | **Deny** }
+* **ResourceType**: Apply rule to users or groups/roles { **users** | **roles** }
+* **Value**: The user(s) or group(s) to apply to (special cases are: '*' = All Users, '?' = Anonymous Users)
+* **Site**: Website to apply rule to
+* **Application**: (Optional) Application to apply rule to
+* **Path**: (Optional) specific application path to apply rule to
+* **Verbs**: (Optional) specific HTTP verbs to apply rule to (e.g. GET, POST, PUT etc.)
+
 ## Versions
 
 ### Unreleased
