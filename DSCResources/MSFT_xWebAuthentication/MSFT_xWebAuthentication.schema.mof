@@ -1,0 +1,10 @@
+[ClassVersion("1.0.0.0"), FriendlyName("xWebAuthentication")]
+class MSFT_xWebAuthentication : OMI_BaseResource
+{
+	[Write,ValueMap{"Present", "Absent"},Values{"Present", "Absent"}] String Ensure;
+	[Key, ValueMap{"Anonymous","Basic","Digest","Windows"}, Values{"Anonymous","Basic","Digest","Windows"}] String Type;
+	[Write,ValueMap{"Enabled", "Disabled"},Values{"Enabled", "Disabled"}] String State;
+	[Required,Key] String Site;
+	[Write] String Application;
+	[Write] String Path;
+};
