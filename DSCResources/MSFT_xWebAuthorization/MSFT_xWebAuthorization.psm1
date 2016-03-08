@@ -111,7 +111,7 @@ function Set-TargetResource
 			Set-WebConfiguration -Filter $Filter -PSPath $PSPath -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
 		} else {
 			# We set the filter to the root path for authorization when creating new rules
-			$Filter = "/system.webServer/security/authorization"	
+			$Filter = "/system.webServer/security/authorization"
 
 			# Create the authorization rule
 			Write-Verbose "Adding configuration for `"$Filter`" at PSPath `"$PSPath`""
