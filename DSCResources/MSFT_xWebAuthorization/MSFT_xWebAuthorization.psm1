@@ -121,6 +121,16 @@ function Set-TargetResource
 		# Delete the authorization rule
 		Write-Verbose "Clearing configuration for `"$Filter`" at PSPath `"$PSPath`""
 		Clear-WebConfiguration -Filter $Filter -PSPath $PSPath
+		# TODO: This is a workaround required for inherited rules. If a rule has been inherited
+		# then running Clear-WebConfiguration once will only create a local copy of the rule,
+		# instead of removing it. We need to either:
+		#     1. Check if the rule has been inherited first and then action accordingly, or
+		#     2. Run Clear-WebConfiguration twice to ensure removal
+		# In this example we have opted for 2. until we can figure out a way to determine if the 
+		# rule is inherited. If the rule was not inherited then a warning is thrown, so we also use
+		# the "SilentlyContinue" directive for the WarningAction to prevent this from being 
+		# displayed.
+		Clear-WebConfiguration -Filter $Filter -PSPath $PSPath -WarningAction SilentlyContinue
 	}
 }
 
