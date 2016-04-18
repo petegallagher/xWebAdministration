@@ -2,41 +2,58 @@ function Get-TargetResource
 {
     [CmdletBinding()]
     [OutputType([System.Collections.Hashtable])]
-    param
-    (
+    param (
         [parameter(Mandatory = $true)]
-        [System.String]
-        $WebsitePath,
-
-        [parameter(Mandatory = $true)]
-        [ValidateSet('AppSettings')]
-        [System.String]
-        $ConfigSection,
+        [ValidateSet("Users","Roles")]
+        [String]
+        $ResourceType,
 
         [parameter(Mandatory = $true)]
         [String]
-        $Key
-    )
+        $Value,
 
-    $existingvalue = Get-ItemValue -key $Key -isAttribute $false -websitePath $WebsitePath -configSection $ConfigSection
-    if($existingvalue -eq $null)
-    {
-        $existingvalue = Get-ItemValue -key $Key -isAttribute $true -websitePath $WebsitePath -configSection $ConfigSection
+        [String]
+        $Verbs,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $Site,
+
+        [String]
+        $Application,
+
+        [String]
+        $Path
+        )
+
+    try {
+        $Filter = GetFilterXpath -ResourceType $ResourceType -Value $Value -Verbs $Verbs
+        $PSPath = GetLocationXpath -Site $Site -Application $Application -Path $Path
+
+        Write-Verbose "Getting configuration for `"$Filter`" at PSPath `"$PSPath`""
+        $AuthorizationRule = Get-WebConfiguration -Filter $Filter -PSPath $PSPath
+    }
+    catch [System.Management.Automation.ItemNotFoundException] {
+        Write-Verbose "PSPath `"$PSPath`" Not Found"
     }
 
-    if($existingvalue.Length -eq 0)
-    {
-         return @{
-             Ensure = 'Absent'
-             Key = $Key
-             Value = $existingvalue
-        }
+    if ($AuthorizationRule -eq $null) {
+        $EnsureResult = "Absent"
+    }
+    else {
+        $EnsureResult = "Present"
     }
 
     return @{
-        Ensure = 'Present'
-        Key = $Key
-        Value = $existingvalue
+        Ensure = $EnsureResult
+        Action = $AuthorizationRule.accessType
+        ResourceType = $ResourceType
+        Value = $Value
+        Verbs = $Verbs
+        Site = $Site
+        Application = $Application
+        Path = $Path
     }
 }
 
@@ -44,225 +61,179 @@ function Get-TargetResource
 function Set-TargetResource
 {
     [CmdletBinding()]
-    param
-    (
-        [parameter(Mandatory = $true)]
-        [System.String]
-        $WebsitePath,
-
-        [parameter(Mandatory = $true)]
-        [ValidateSet('AppSettings')]
-        [System.String]
-        $ConfigSection,
-
-        [ValidateSet('Present','Absent')]
-        [System.String]
-        $Ensure = 'Present',
-
-        [parameter(Mandatory = $true)]
+    param (
+        [ValidateSet("Present", "Absent")]
         [String]
-        $Key,
+        $Ensure = "Present",
 
+        [ValidateSet("Allow", "Deny")]
+        [String]
+        $Action = "Allow",
+
+        [parameter(Mandatory = $true)]
+        [ValidateSet("Users","Roles")]
+        [String]
+        $ResourceType,
+
+        [parameter(Mandatory = $true)]
         [String]
         $Value,
 
-        [System.Boolean]
-        $IsAttribute
-    )
+        [String]
+        $Verbs = "",
 
-    if($Ensure -eq 'Present')
-    {
-        $existingvalue = Get-ItemValue -key $Key -isAttribute $IsAttribute -websitePath $WebsitePath -configSection $ConfigSection
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $Site,
 
-        if((!$IsAttribute -and ($existingvalue -eq $null)) -or ($IsAttribute -and ($existingvalue.Length -eq 0)))
-        {
-            Add-Item -key $Key -value $Value -isAttribute $IsAttribute -websitePath $WebsitePath -configSection $ConfigSection
+        [String]
+        $Application,
+
+        [String]
+        $Path
+        )
+
+    $Filter = GetFilterXpath -ResourceType $ResourceType -Value $Value -Verbs $Verbs
+    $PSPath = GetLocationXpath -Site $Site -Application $Application -Path $Path
+
+    if ($Ensure -eq "Present") {
+        Switch ($ResourceType) {
+            "Users" { $users = $Value }
+            "Roles" { $roles = $Value }
         }
-        else
-        {
-            $propertyName ='value'
-            if($IsAttribute)
-            {
-                $propertyName = $Key
-            }
-            Modify-Item -propertyName $propertyName -oldValue $existingvalue -newValue $Value -isAttribute $IsAttribute -websitePath $WebsitePath -configSection $ConfigSection
+
+        $CurrentRule = Get-TargetResource -ResourceType $ResourceType -Value $Value -Verbs $Verbs -Site $Site -Application $Application -Path $Path
+
+        if ($CurrentRule.Ensure -eq "Present") {
+            # Update the authorization rule
+            Write-Verbose "Setting configuration for `"$Filter`" at PSPath `"$PSPath`""
+            Set-WebConfiguration -Filter $Filter -PSPath $PSPath -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
+        } else {
+            # We set the filter to the root path for authorization when creating new rules
+            $Filter = "/system.webServer/security/authorization"
+
+            # Create the authorization rule
+            Write-Verbose "Adding configuration for `"$Filter`" at PSPath `"$PSPath`""
+            Add-WebConfiguration -Filter $Filter -PSPath $PSPath -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
         }
-    }
-    else
-    {
-        Remove-Item -key $Key -isAttribute $IsAttribute -websitePath $WebsitePath -configSection $ConfigSection
+    } else {
+        # Delete the authorization rule
+        Write-Verbose "Clearing configuration for `"$Filter`" at PSPath `"$PSPath`""
+        Clear-WebConfiguration -Filter $Filter -PSPath $PSPath
+        # TODO: This is a workaround required for inherited rules. If a rule has been inherited
+        # then running Clear-WebConfiguration once will only create a local copy of the rule,
+        # instead of removing it. We need to either:
+        #     1. Check if the rule has been inherited first and then action accordingly, or
+        #     2. Run Clear-WebConfiguration twice to ensure removal
+        # In this example we have opted for 2. until we can figure out a way to determine if the 
+        # rule is inherited. If the rule was not inherited then a warning is thrown, so we also use
+        # the "SilentlyContinue" directive for the WarningAction to prevent this from being 
+        # displayed.
+        Clear-WebConfiguration -Filter $Filter -PSPath $PSPath -WarningAction SilentlyContinue
     }
 }
+
 
 function Test-TargetResource
 {
     [CmdletBinding()]
-    [OutputType([System.Boolean])]
-    param
-    (
-        [parameter(Mandatory = $true)]
-        [System.String]
-        $WebsitePath,
-
-        [parameter(Mandatory = $true)]
-        [ValidateSet('AppSettings')]
-        [System.String]
-        $ConfigSection,
-
-        [ValidateSet('Present','Absent')]
-        [System.String]
+    param (
+        [ValidateSet("Present", "Absent")]
+        [String]
         $Ensure = 'Present',
 
-        [parameter(Mandatory = $true)]
+        [ValidateSet("Allow", "Deny")]
         [String]
-        $Key,
+        $Action = 'Allow',
 
+        [parameter(Mandatory = $true)]
+        [ValidateSet("Users","Roles")]
+        [String]
+        $ResourceType,
+
+        [parameter(Mandatory = $true)]
         [String]
         $Value,
 
-        [System.Boolean]
-        $IsAttribute
-    )
+        [String]
+        $Verbs,
 
-    if(!$PSBoundParameters.ContainsKey('IsAttribute'))
-    {
-        $IsAttribute = $false
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $Site,
+
+        [String]
+        $Application,
+
+        [String]
+        $Path
+        )
+
+    Write-Verbose "Testing configuration for `"$ResourceType`", value `"$Value`", site `"$Site`""
+    $InDesiredState = $true
+
+    $CurrentRule = Get-TargetResource -ResourceType $ResourceType -Value $Value -Verbs $Verbs -Site $Site -Application $Application -Path $Path
+
+    if ($Ensure -eq "Present") { 
+        if ($Ensure -ne $CurrentRule.Ensure) { $InDesiredState = $false }
+        if ($Action -ne $CurrentRule.Action) { $InDesiredState = $false }
+        if ($ResourceType -ne $CurrentRule.ResourceType) { $InDesiredState = $false }
+        if ($Value -ne $CurrentRule.Value) { $InDesiredState = $false }
+        if ($Verbs -ne $CurrentRule.Verbs) { $InDesiredState = $false }
+        if ($Site -ne $CurrentRule.Site) { $InDesiredState = $false }
+        if ($Application -ne $CurrentRule.Application) { $InDesiredState = $false }
+        if ($Path -ne $CurrentRule.Path) { $InDesiredState = $false }
+    } elseif ($Ensure -eq "Absent") {
+        if ($Ensure -ne $CurrentRule.Ensure) { $InDesiredState = $false }
     }
-
-    $existingvalue = Get-ItemValue -key $Key -isAttribute $IsAttribute -websitePath $WebsitePath -configSection $ConfigSection
     
-    if($Ensure -eq 'Present')
-    {
-        if(!$IsAttribute)
-        {
-            if(($existingvalue -eq $null) -or ($existingvalue -ne $Value))
-            {
-                return $false
-            }
-            else
-            {
-                return $true
-            }
-        }
-        else
-        {
-            if(($existingvalue.Length -eq 0) -or ($existingvalue -ne $Value))
-            {
-                return $false
-            }
-            else
-            {
-                return $true
-            }
-        }
-    }
-    else
-    {
-        if(!$IsAttribute)
-        {
-            if(($existingvalue -eq $null))
-            {
-                return $true
-            }
-            else
-            {
-                return $false
-            }
-        }
-        else
-        {
-            if(($existingvalue.Length -eq 0))
-            {
-                return $true
-            }
-            else
-            {
-                return $false
-            }
-        }
-    }
+    return $InDesiredState
 }
 
-function Add-item([string]$key, [string]$value, [Boolean]$isAttribute, [string]$websitePath, [string]$configSection)
+
+function GetFilterXpath
 {
+    param(
+        [parameter(Mandatory = $true)]
+        [ValidateSet("Users","Roles")]
+        [String]
+        $ResourceType,
 
-    $defaultFilter = $configSection
+        [parameter(Mandatory = $true)]
+        [String]
+        $Value,
 
-    $itemCollection = @{key=$key;value=$value}
+        [String]
+        $Verbs
+        )
 
-    if(!$isAttribute)
+    Switch ($ResourceType)
     {
-        Add-WebConfigurationProperty -filter $defaultFilter -name '.' -value $itemCollection -PSPath $websitePath
+        "Users" { $users = $Value }
+        "Roles" { $roles = $Value }
     }
-    else
-    {
-        Set-WebConfigurationProperty -filter $defaultFilter -PSPath $websitePath -name $key -value $value -WarningAction Stop 
-    }
+
+    "/system.webServer/security/authorization/add[@users='$($users)' and @roles='$($roles)' and @verbs='$($verbs)']"
 }
 
-function Modify-Item([string]$propertyName, [string]$oldValue, [string]$newValue, [Boolean]$isAttribute, [string]$websitePath, [string]$configSection)
+function GetLocationXpath
 {
-    $defaultFilter = $configSection
+    param
+    (
+        [String]
+        $Site,
 
-    if(!$isAttribute)
-    {
-        $filter= "$defaultFilter/add[@$propertyName=`'$oldValue`']"
+        [String]
+        $Application,
 
-        Set-WebConfigurationProperty -filter $filter -PSPath $websitePath -name $propertyName -value $newValue -WarningAction Stop
-    }
-    else
-    {
-        Set-WebConfigurationProperty -Filter $defaultFilter -PSPath $websitePath -name $propertyName -value $newValue -WarningAction Stop
-    }
+        [String]
+        $Path
+        )
+
+    @("IIS:\sites", $Site, $Application, $Path) -join "\"
 }
 
-function Remove-Item([string]$key, [Boolean]$isAttribute, [string]$websitePath, [string]$configSection)
-{
-    $defaultFilter = $configSection
-
-    if(!$isAttribute)
-    {
-        $filter = "$defaultFilter/add[@key=`'$key`']"
-
-        Clear-WebConfiguration -Filter $filter -PSPath $websitePath -WarningAction Stop
-    }
-    else
-    {
-        $filter = "$defaultFilter/@$key"
-
-        # this is a workaround to ensure if appSettings has no collection and we try to delete the only attribute, the entire node is not deleted.
-        # if we try removing the only attribute even if there is one collection item, the node is preserved. I am not able to find a way to do this
-        #using clear-webconfiguration alone.
-        Add-item -key 'dummyKey' -value 'dummyValue' -isAttribute $false -websitePath $websitePath -configSection $configSection
-
-        clear-WebConfiguration -filter $filter -PSPath $websitePath -WarningAction Stop
-
-        Remove-Item -key 'dummyKey' -isAttribute $false -websitePath $websitePath -configSection $configSection
-    }
-}
-
-function Get-ItemValue([string]$key, [Boolean]$isAttribute, [string]$websitePath, [string]$configSection)
-{
-    # if not present, $value.Value will be null
-    $defaultFilter = $configSection
-
-    if(!$isAttribute)
-    {
-        $filter = "$defaultFilter/add[@key=`'$key`']"
-
-        $value = Get-WebConfigurationProperty -Filter $filter -Name 'value' -PSPath $websitePath
- 
-    }
-    else
-    {
-        $value = Get-WebConfigurationProperty -filter $defaultFilter -name "$key" -PSPath $websitePath
-    }
-  
-    return $value.Value
-}
 
 Export-ModuleMember -Function *-TargetResource
-
-
-
-
