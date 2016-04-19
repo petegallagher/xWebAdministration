@@ -2,238 +2,99 @@ function Get-TargetResource
 {
     [CmdletBinding()]
     [OutputType([System.Collections.Hashtable])]
-    param (
+    param
+    (
         [parameter(Mandatory = $true)]
-        [ValidateSet("Users","Roles")]
-        [String]
-        $ResourceType,
+        [System.String]
+        $WebsitePath,
 
         [parameter(Mandatory = $true)]
         [String]
-        $Value,
+        $Key
+    )
 
-        [String]
-        $Verbs,
-
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [String]
-        $Site,
-
-        [String]
-        $Application,
-
-        [String]
-        $Path
-        )
-
-    try {
-        $Filter = GetFilterXpath -ResourceType $ResourceType -Value $Value -Verbs $Verbs
-        $PSPath = GetLocationXpath -Site $Site -Application $Application -Path $Path
-
-        Write-Verbose "Getting configuration for `"$Filter`" at PSPath `"$PSPath`""
-        $AuthorizationRule = Get-WebConfiguration -Filter $Filter -PSPath $PSPath
-    }
-    catch [System.Management.Automation.ItemNotFoundException] {
-        Write-Verbose "PSPath `"$PSPath`" Not Found"
-    }
-
-    if ($AuthorizationRule -eq $null) {
-        $EnsureResult = "Absent"
-    }
-    else {
-        $EnsureResult = "Present"
-    }
-
-    return @{
-        Ensure = $EnsureResult
-        Action = $AuthorizationRule.accessType
-        ResourceType = $ResourceType
-        Value = $Value
-        Verbs = $Verbs
-        Site = $Site
-        Application = $Application
-        Path = $Path
-    }
+    Write-Verbose "Getting configuration for `"$Key`" at PSPath `"$WebsitePath`""
+    return Get-WebConfiguration -PSPath $WebsitePath -Filter $Key
 }
 
 
 function Set-TargetResource
 {
     [CmdletBinding()]
-    param (
-        [ValidateSet("Present", "Absent")]
-        [String]
-        $Ensure = "Present",
-
-        [ValidateSet("Allow", "Deny")]
-        [String]
-        $Action = "Allow",
-
+    param
+    (
         [parameter(Mandatory = $true)]
-        [ValidateSet("Users","Roles")]
-        [String]
-        $ResourceType,
+        [System.String]
+        $WebsitePath,
+
+        [ValidateSet('Present','Absent')]
+        [System.String]
+        $Ensure = 'Present',
 
         [parameter(Mandatory = $true)]
         [String]
-        $Value,
+        $Key,
 
         [String]
-        $Verbs = "",
+        $Value
+    )
 
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [String]
-        $Site,
+    if($Ensure -eq 'Present')
+    {
+        $existingResource = Get-TargetResource -WebsitePath $WebsitePath -Key $Key
 
-        [String]
-        $Application,
-
-        [String]
-        $Path
-        )
-
-    $Filter = GetFilterXpath -ResourceType $ResourceType -Value $Value -Verbs $Verbs
-    $PSPath = GetLocationXpath -Site $Site -Application $Application -Path $Path
-
-    if ($Ensure -eq "Present") {
-        Switch ($ResourceType) {
-            "Users" { $users = $Value }
-            "Roles" { $roles = $Value }
-        }
-
-        $CurrentRule = Get-TargetResource -ResourceType $ResourceType -Value $Value -Verbs $Verbs -Site $Site -Application $Application -Path $Path
-
-        if ($CurrentRule.Ensure -eq "Present") {
-            # Update the authorization rule
-            Write-Verbose "Setting configuration for `"$Filter`" at PSPath `"$PSPath`""
-            Set-WebConfiguration -Filter $Filter -PSPath $PSPath -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
+        if($existingResource) {
+            Write-Verbose "Setting configuration `"$Key`"=`"$Value`" at PSPath `"$WebsitePath`""
+            Set-WebConfiguration -Filter $Key -PSPath $WebsitePath -Value $Value
         } else {
-            # We set the filter to the root path for authorization when creating new rules
-            $Filter = "/system.webServer/security/authorization"
-
-            # Create the authorization rule
-            Write-Verbose "Adding configuration for `"$Filter`" at PSPath `"$PSPath`""
-            Add-WebConfiguration -Filter $Filter -PSPath $PSPath -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
+            Write-Verbose "Adding configuration for `"$Key`"=`"$Value`" at PSPath `"$WebsitePath`""
+            Add-WebConfiguration -Filter $Key -PSPath $WebsitePath -Value $Value
         }
-    } else {
-        # Delete the authorization rule
-        Write-Verbose "Clearing configuration for `"$Filter`" at PSPath `"$PSPath`""
-        Clear-WebConfiguration -Filter $Filter -PSPath $PSPath
-        # TODO: This is a workaround required for inherited rules. If a rule has been inherited
-        # then running Clear-WebConfiguration once will only create a local copy of the rule,
-        # instead of removing it. We need to either:
-        #     1. Check if the rule has been inherited first and then action accordingly, or
-        #     2. Run Clear-WebConfiguration twice to ensure removal
-        # In this example we have opted for 2. until we can figure out a way to determine if the 
-        # rule is inherited. If the rule was not inherited then a warning is thrown, so we also use
-        # the "SilentlyContinue" directive for the WarningAction to prevent this from being 
-        # displayed.
-        Clear-WebConfiguration -Filter $Filter -PSPath $PSPath -WarningAction SilentlyContinue
+    }
+    else
+    {
+        Write-Verbose "Clearing configuration for `"$Key`" at PSPath `"$WebsitePath`""
+        Clear-WebConfiguration -Filter $Key -PSPath $WebsitePath
     }
 }
-
 
 function Test-TargetResource
 {
     [CmdletBinding()]
-    param (
-        [ValidateSet("Present", "Absent")]
-        [String]
-        $Ensure = 'Present',
-
-        [ValidateSet("Allow", "Deny")]
-        [String]
-        $Action = 'Allow',
-
-        [parameter(Mandatory = $true)]
-        [ValidateSet("Users","Roles")]
-        [String]
-        $ResourceType,
-
-        [parameter(Mandatory = $true)]
-        [String]
-        $Value,
-
-        [String]
-        $Verbs,
-
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [String]
-        $Site,
-
-        [String]
-        $Application,
-
-        [String]
-        $Path
-        )
-
-    Write-Verbose "Testing configuration for `"$ResourceType`", value `"$Value`", site `"$Site`""
-    $InDesiredState = $true
-
-    $CurrentRule = Get-TargetResource -ResourceType $ResourceType -Value $Value -Verbs $Verbs -Site $Site -Application $Application -Path $Path
-
-    if ($Ensure -eq "Present") { 
-        if ($Ensure -ne $CurrentRule.Ensure) { $InDesiredState = $false }
-        if ($Action -ne $CurrentRule.Action) { $InDesiredState = $false }
-        if ($ResourceType -ne $CurrentRule.ResourceType) { $InDesiredState = $false }
-        if ($Value -ne $CurrentRule.Value) { $InDesiredState = $false }
-        if ($Verbs -ne $CurrentRule.Verbs) { $InDesiredState = $false }
-        if ($Site -ne $CurrentRule.Site) { $InDesiredState = $false }
-        if ($Application -ne $CurrentRule.Application) { $InDesiredState = $false }
-        if ($Path -ne $CurrentRule.Path) { $InDesiredState = $false }
-    } elseif ($Ensure -eq "Absent") {
-        if ($Ensure -ne $CurrentRule.Ensure) { $InDesiredState = $false }
-    }
-    
-    return $InDesiredState
-}
-
-
-function GetFilterXpath
-{
-    param(
-        [parameter(Mandatory = $true)]
-        [ValidateSet("Users","Roles")]
-        [String]
-        $ResourceType,
-
-        [parameter(Mandatory = $true)]
-        [String]
-        $Value,
-
-        [String]
-        $Verbs
-        )
-
-    Switch ($ResourceType)
-    {
-        "Users" { $users = $Value }
-        "Roles" { $roles = $Value }
-    }
-
-    "/system.webServer/security/authorization/add[@users='$($users)' and @roles='$($roles)' and @verbs='$($verbs)']"
-}
-
-function GetLocationXpath
-{
+    [OutputType([System.Boolean])]
     param
     (
+        [parameter(Mandatory = $true)]
+        [System.String]
+        $WebsitePath,
+
+        [ValidateSet('Present','Absent')]
+        [System.String]
+        $Ensure = 'Present',
+
+        [parameter(Mandatory = $true)]
         [String]
-        $Site,
+        $Key,
 
         [String]
-        $Application,
+        $Value
+    )
 
-        [String]
-        $Path
-        )
-
-    @("IIS:\sites", $Site, $Application, $Path) -join "\"
+    $existingResource = Get-TargetResource -WebsitePath $WebsitePath -Key $Key
+    
+    if($Ensure -eq 'Present') {
+        if($Value -eq $existingResource.Value) {
+            return $true
+        } else {
+            return $false
+        }
+    } elseif ($Ensure -eq "Absent") {
+        if(!$existingResource) {
+            return $true
+        } else {
+            return $false
+        }
+    }
 }
-
 
 Export-ModuleMember -Function *-TargetResource
