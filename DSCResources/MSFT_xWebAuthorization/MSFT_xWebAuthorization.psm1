@@ -12,49 +12,23 @@ function Get-TargetResource
 		[String]
 		$Value,
 
-		[String]
-		$Verbs,
-
 		[Parameter(Mandatory = $true)]
 		[ValidateNotNullOrEmpty()]
 		[String]
-		$Site,
+		$PSPath,
+
+		[Parameter(Mandatory = $true)]
+		[String]
+		$Location,
 
 		[String]
-		$Application,
+		$Verbs
+	)
 
-		[String]
-		$Path
-		)
+	$Filter = GetFilterXpath -ResourceType $ResourceType -Value $Value -Verbs $Verbs
 
-	try {
-		$Filter = GetFilterXpath -ResourceType $ResourceType -Value $Value -Verbs $Verbs
-		$PSPath = GetLocationXpath -Site $Site -Application $Application -Path $Path
-
-		Write-Verbose "Getting configuration for `"$Filter`" at PSPath `"$PSPath`""
-		$AuthorizationRule = Get-WebConfiguration -Filter $Filter -PSPath $PSPath
-	}
-	catch [System.Management.Automation.ItemNotFoundException] {
-		Write-Verbose "PSPath `"$PSPath`" Not Found"
-	}
-
-	if ($AuthorizationRule -eq $null) {
-		$EnsureResult = "Absent"
-	}
-	else {
-		$EnsureResult = "Present"
-	}
-
-	return @{
-		Ensure = $EnsureResult
-		Action = $AuthorizationRule.accessType
-		ResourceType = $ResourceType
-		Value = $Value
-		Verbs = $Verbs
-		Site = $Site
-		Application = $Application
-		Path = $Path
-	}
+	Write-Verbose "Getting configuration for `"$Filter`" at PSPath `"$PSPath`" and Location `"$Location`""
+	return Get-WebConfiguration -Filter $Filter -PSPath $PSPath -Location $Location
 }
 
 
@@ -80,47 +54,44 @@ function Set-TargetResource
 		$Value,
 
 		[String]
-		$Verbs = "",
+		$Verbs,
 
 		[Parameter(Mandatory = $true)]
 		[ValidateNotNullOrEmpty()]
 		[String]
-		$Site,
+		$PSPath,
 
+		[Parameter(Mandatory = $true)]
 		[String]
-		$Application,
-
-		[String]
-		$Path
+		$Location
 		)
 
 	$Filter = GetFilterXpath -ResourceType $ResourceType -Value $Value -Verbs $Verbs
-	$PSPath = GetLocationXpath -Site $Site -Application $Application -Path $Path
-
+	
 	if ($Ensure -eq "Present") {
 		Switch ($ResourceType) {
 			"Users" { $users = $Value }
 			"Roles" { $roles = $Value }
 		}
 
-		$CurrentRule = Get-TargetResource -ResourceType $ResourceType -Value $Value -Verbs $Verbs -Site $Site -Application $Application -Path $Path
+		$CurrentRule = Get-TargetResource -ResourceType $ResourceType -Value $Value -Verbs $Verbs -PSPath $PSPath -Location $Location
 
-		if ($CurrentRule.Ensure -eq "Present") {
+		if ($CurrentRule) {
 			# Update the authorization rule
 			Write-Verbose "Setting configuration for `"$Filter`" at PSPath `"$PSPath`""
-			Set-WebConfiguration -Filter $Filter -PSPath $PSPath -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
+			Set-WebConfiguration -Filter $Filter -PSPath $PSPath -Location $Location -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
 		} else {
 			# We set the filter to the root path for authorization when creating new rules
 			$Filter = "/system.webServer/security/authorization"
 
 			# Create the authorization rule
 			Write-Verbose "Adding configuration for `"$Filter`" at PSPath `"$PSPath`""
-			Add-WebConfiguration -Filter $Filter -PSPath $PSPath -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
+			Add-WebConfiguration -Filter $Filter -PSPath $PSPath -Location $Location -Value @{accessType=$Action;users="$users";roles="$roles";verbs="$Verbs"}
 		}
 	} else {
 		# Delete the authorization rule
 		Write-Verbose "Clearing configuration for `"$Filter`" at PSPath `"$PSPath`""
-		Clear-WebConfiguration -Filter $Filter -PSPath $PSPath
+		Clear-WebConfiguration -Filter $Filter -PSPath $PSPath -Location $Location
 		# TODO: This is a workaround required for inherited rules. If a rule has been inherited
 		# then running Clear-WebConfiguration once will only create a local copy of the rule,
 		# instead of removing it. We need to either:
@@ -130,7 +101,7 @@ function Set-TargetResource
 		# rule is inherited. If the rule was not inherited then a warning is thrown, so we also use
 		# the "SilentlyContinue" directive for the WarningAction to prevent this from being 
 		# displayed.
-		Clear-WebConfiguration -Filter $Filter -PSPath $PSPath -WarningAction SilentlyContinue
+		Clear-WebConfiguration -Filter $Filter -PSPath $PSPath -Location $Location -WarningAction SilentlyContinue
 	}
 }
 
@@ -162,31 +133,33 @@ function Test-TargetResource
 		[Parameter(Mandatory = $true)]
 		[ValidateNotNullOrEmpty()]
 		[String]
-		$Site,
+		$PSPath,
 
+		[Parameter(Mandatory = $true)]
 		[String]
-		$Application,
-
-		[String]
-		$Path
+		$Location
 		)
 
-    Write-Verbose "Testing configuration for `"$ResourceType`", value `"$Value`", site `"$Site`""
+    Write-Verbose "Testing configuration for `"$ResourceType`", value `"$Value`", site `"$PSPath`", location `"$Location`""
 	$InDesiredState = $true
 
-	$CurrentRule = Get-TargetResource -ResourceType $ResourceType -Value $Value -Verbs $Verbs -Site $Site -Application $Application -Path $Path
+	$CurrentRule = Get-TargetResource -ResourceType $ResourceType -Value $Value -Verbs $Verbs -PSPath $PSPath -Location $Location
 
-	if ($Ensure -eq "Present") { 
-		if ($Ensure -ne $CurrentRule.Ensure) { $InDesiredState = $false }
-		if ($Action -ne $CurrentRule.Action) { $InDesiredState = $false }
-		if ($ResourceType -ne $CurrentRule.ResourceType) { $InDesiredState = $false }
-		if ($Value -ne $CurrentRule.Value) { $InDesiredState = $false }
-		if ($Verbs -ne $CurrentRule.Verbs) { $InDesiredState = $false }
-		if ($Site -ne $CurrentRule.Site) { $InDesiredState = $false }
-		if ($Application -ne $CurrentRule.Application) { $InDesiredState = $false }
-		if ($Path -ne $CurrentRule.Path) { $InDesiredState = $false }
+	if ($Ensure -eq "Present") {
+		if($CurrentRule) {
+            if ($Action -ne $CurrentRule.Action) { $InDesiredState = $false }
+			if ($ResourceType -ne $CurrentRule.ResourceType) { $InDesiredState = $false }
+			if ($Value -ne $CurrentRule.Value) { $InDesiredState = $false }
+			if ($Verbs -ne $CurrentRule.Verbs) { $InDesiredState = $false }
+			if ($PSPath -ne $CurrentRule.PSPath) { $InDesiredState = $false }
+			if ($Location -ne $CurrentRule.Location) { $InDesiredState = $false }
+        } else {
+            $InDesiredState = $false
+        }	
 	} elseif ($Ensure -eq "Absent") {
-		if ($Ensure -ne $CurrentRule.Ensure) { $InDesiredState = $false }
+		if($CurrentRule) {
+            $InDesiredState = $false
+        }
 	}
     
 	return $InDesiredState
@@ -217,23 +190,5 @@ function GetFilterXpath
 
 	"/system.webServer/security/authorization/add[@users='$($users)' and @roles='$($roles)' and @verbs='$($verbs)']"
 }
-
-function GetLocationXpath
-{
-	param
-	(
-		[String]
-		$Site,
-
-		[String]
-		$Application,
-
-		[String]
-		$Path
-		)
-
-	@("IIS:\sites", $Site, $Application, $Path) -join "\"
-}
-
 
 Export-ModuleMember -Function *-TargetResource
